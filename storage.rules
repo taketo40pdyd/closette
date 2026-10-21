@@ -1,0 +1,11 @@
+rules_version = '2';
+
+// このアプリは Cloud Storage を使っていません(画像はFirestoreのドキュメントに保存)。
+// 使っていないバケットは全面拒否にしておきます。
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

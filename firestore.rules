@@ -1,0 +1,62 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+    function isGoogleUser() {
+      // ゲスト(匿名)ログインではユーザーIDを確保できない
+      return signedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    // ── 服・コーデ・ウィッシュ・手放した服・プロフィール ──
+    // users/{uid}/closette/{docId} は本人だけが読み書きできる
+    match /users/{uid}/closette/{docId} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+        && request.resource.data.kind in ['item', 'outfit', 'wish', 'gone', 'profile']
+        && request.resource.data.id is string
+        && request.resource.data.id.size() <= 80;
+      allow delete: if isOwner(uid);
+    }
+
+    // ── ユーザーID(重複チェック用) ──
+    // userIds/{ID} に持ち主のuidを記録する。ID は半角英小文字・数字・「_」「.」の3〜20文字
+    match /userIds/{id} {
+      function validUserId() {
+        return id.matches('[a-z0-9_.]{3,20}')
+          && !id.matches('\\..*')
+          && !id.matches('.*\\.')
+          && !id.matches('.*\\.\\..*');
+      }
+      // 空きかどうかの確認(transaction内のget)に必要。一覧(list)は許可しない
+      allow get: if signedIn();
+      allow create: if isGoogleUser()
+        && validUserId()
+        && request.resource.data.keys().hasOnly(['uid', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['uid', 'updatedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.updatedAt is number;
+      // 自分のIDだけ更新できる(他人のIDの乗っ取りは不可)
+      allow update: if isGoogleUser()
+        && validUserId()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['uid', 'updatedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.updatedAt is number;
+      // 存在しないIDの削除(変更前のIDが未登録のとき)も通す。他人のIDは消せない
+      allow delete: if signedIn()
+        && (resource == null || resource.data.uid == request.auth.uid);
+    }
+
+    // 上記以外はすべて拒否
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
